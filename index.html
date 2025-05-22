@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>정교한 테트리스</title>
+<style>
+  body {
+    background: #121212;
+    color: #eee;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    margin: 0;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    height: 100vh;
+    user-select: none;
+    padding: 20px;
+  }
+  #game {
+    display: flex;
+    gap: 20px;
+  }
+  canvas {
+    background: #000;
+    border: 2px solid #555;
+    image-rendering: pixelated;
+  }
+  #tetris {
+    width: 240px;
+    height: 400px;
+  }
+  #next, #hold {
+    width: 100px;
+    height: 100px;
+    background: #222;
+    border: 2px solid #555;
+  }
+  #sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+  }
+  #scoreboard {
+    font-size: 18px;
+  }
+  h2 {
+    margin: 5px 0;
+    font-weight: 600;
+  }
+  .preview-canvas {
+    width: 100px;
+    height: 100px;
+    background: #111;
+    border: 1px solid #666;
+  }
+  button {
+    padding: 8px 12px;
+    font-size: 16px;
+    border-radius: 4px;
+    border: none;
+    background: #555;
+    color: #eee;
+    cursor: pointer;
+    user-select: none;
+  }
+  button:hover {
+    background: #777;
+  }
+</style>
+</head>
+<body>
+  <div id="game">
+    <canvas id="tetris" width="240" height="400"></canvas>
+    <div id="sidebar">
+      <div>
+        <h2>다음 조각</h2>
+        <canvas id="next" width="100" height="100" class="preview-canvas"></canvas>
+      </div>
+      <div>
+        <h2>홀드</h2>
+        <canvas id="hold" width="100" height="100" class="preview-canvas"></canvas>
+      </div>
+      <div id="scoreboard">
+        <div>점수: <span id="score">0</span></div>
+        <div>레벨: <span id="level">1</span></div>
+        <div>라인: <span id="lines">0</span></div>
+      </div>
+      <button id="restartBtn">재시작</button>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('tetris');
+  const ctx = canvas.getContext('2d');
+  const nextCanvas = document.getElementById('next');
+  const nextCtx = nextCanvas.getContext('2d');
+  const holdCanvas = document.getElementById('hold');
+  const holdCtx = holdCanvas.getContext('2d');
+  const scoreElem = document.getElementById('score');
+  const levelElem = document.getElementById('level');
+  const linesElem = document.getElementById('lines');
+  const restartBtn = document.getElementById('restartBtn');
+
+  const scale = 20; // 블록 크기 (px)
+  const cols = 12;
+  const rows = 20;
+
+  ctx.scale(scale, scale);
+  nextCtx.scale(scale / 2, scale / 2);
+  holdCtx.scale(scale / 2, scale / 2);
+
+  const colors = [
+    null,
+    '#00f0f0', // I
+    '#0000f0', // J
+    '#f0a000', // L
+    '#f0f000', // O
+    '#00f000', // S
+    '#a000f0', // T
+    '#f00000'  // Z
+  ];
+
+  const tetrominoes = {
+    I: [
+      [0,0,0,0],
+      [1,1,1,1],
+      [0,0,0,0],
+      [0,0,0,0]
+    ],
+    J: [
+      [2,0,0],
+      [2,2,2],
+      [0,0,0]
+    ],
+    L: [
+      [0,0,3],
+      [3,3,3],
+      [0,0,0]
+    ],
+    O: [
+      [4,4],
+      [4,4]
+    ],
+    S: [
+      [0,5,5],
+      [5,5,0],
+      [0,0,0]
+    ],
+    T: [
+      [0,6,0],
+      [6,6,6],
+      [0,0,0]
+    ],
+    Z: [
+      [7,7,0],
+      [0,7,7],
+      [0,0,0]
+    ],
+  };
+
+  function createMatrix(w, h) {
+    const matrix = [];
+    while(h--) matrix.push(new Array(w).fill(0));
+    return matrix;
+  }
+
+  const player = {
+    pos: {x:0, y:0},
+    matrix: null,
+    next: null,
+    hold: null,
+    holdUsed: false
+  };
+
+  let arena = createMatrix(cols, rows);
+  let dropCounter = 0;
+  let dropInterval = 1000;
+  let lastTime = 0;
+  let score = 0;
+  let level = 1;
+  let lines = 0;
+
+  function drawMatrix(matrix, offset, context) {
+    matrix.forEach((row, y) => {
+      row.forEach((value, x) => {
+        if(value !== 0) {
+          context.fillStyle = colors[value];
+          context.fillRect(x + offset.x, y + offset.y, 1, 1);
+          context.strokeStyle = '#222';
+          context.lineWidth = 0.05;
+          context.strokeRect(x + offset.x, y + offset.y, 1, 1);
+        }
+      });
+    });
+  }
+
+  function drawGhostMatrix(matrix, offset, context) {
+    context.globalAlpha = 0.5;
+    matrix.forEach((row, y) => {
+      row.forEach((value, x) => {
+        if(value !== 0) {
+          context.fillStyle = '#ffffff';
+          context.fillRect(x + offset.x, y + offset.y, 1, 1);
+          context.strokeStyle = '#666';
+          context.lineWidth = 0.05;
+          context.strokeRect(x + offset.x, y + offset.y, 1, 1);
+        }
+      });
+    });
+    context.globalAlpha = 1;
+  }
+
+  // 격자 선 그리기 함수 추가
+  function drawGrid(context, cols, rows) {
+    context.strokeStyle = '#333';
+    context.lineWidth = 0.03;
+
+    for(let x = 0; x <= cols; x++) {
+      context.beginPath();
+      context.moveTo(x, 0);
+      context.lineTo(x, rows);
+      context.stroke();
+    }
+
+    for(let y = 0; y <= rows; y++) {
+      context.beginPath();
+      context.moveTo(0, y);
+      context.lineTo(cols, y);
+      context.stroke();
+    }
+  }
+
+  function collide(arena, player) {
+    const m = player.matrix;
+    const o = player.pos;
+    for(let y=0; y<m.length; y++) {
+      for(let x=0; x<m[y].length; x++) {
+        if(m[y][x] !== 0 &&
+           (arena[y+o.y] && arena[y+o.y][x+o.x]) !== 0) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  function merge(arena, player) {
+    player.matrix.forEach((row,y) => {
+      row.forEach((value,x) => {
+        if(value !== 0) {
+          arena[y + player.pos.y][x + player.pos.x] = value;
+        }
+      });
+    });
+  }
+
+  function rotate(matrix, dir) {
+    for(let y=0; y<matrix.length; y++) {
+      for(let x=0; x<y; x++) {
+        [matrix[x][y], matrix[y][x]] = [matrix[y][x], matrix[x][y]];
+      }
+    }
+    if(dir > 0) {
+      matrix.forEach(row => row.reverse());
+    } else {
+      matrix.reverse();
+    }
+  }
+
+  function arenaSweep() {
+    let rowCount = 1;
+    outer: for(let y=arena.length-1; y>=0; y--) {
+      for(let x=0; x<arena[y].length; x++) {
+        if(arena[y][x] === 0) {
+          continue outer;
+        }
+      }
+      const row = arena.splice(y,1)[0].fill(0);
+      arena.unshift(row);
+      y++;
+
+      score += rowCount * 100 * level;
+      lines++;
+      rowCount *= 2;
+
+      if(lines >= level * 10) {
+        level++;
+        dropInterval *= 0.85;
+      }
+    }
+  }
+
+  function createPiece(type) {
+    return tetrominoes[type].map(row => row.slice());
+  }
+
+  function randomPiece() {
+    const pieces = 'TJLOSZI';
+    return createPiece(pieces[pieces.length * Math.random() | 0]);
+  }
+
+  function playerReset() {
+    if(player.next === null) {
+      player.matrix = randomPiece();
+      player.next = randomPiece();
+    } else {
+      player.matrix = player.next;
+      player.next = randomPiece();
+    }
+    player.pos.y = 0;
+    player.pos.x = Math.floor(cols/2) - Math.floor(player.matrix[0].length/2);
+    player.holdUsed = false;
+
+    if(collide(arena, player)) {
+      arena.forEach(row => row.fill(0));
+      score = 0;
+      level = 1;
+      lines = 0;
+      dropInterval = 1000;
+      updateScore();
+    }
+  }
+
+  function playerDrop() {
+    player.pos.y++;
+    if(collide(arena, player)) {
+      player.pos.y--;
+      merge(arena, player);
+      arenaSweep();
+      playerReset();
+      updateScore();
+    }
+    dropCounter = 0;
+  }
+
+  function hardDrop() {
+    while(!collide(arena, player)) {
+      player.pos.y++;
+    }
+    player.pos.y--;
+    merge(arena, player);
+    arenaSweep();
+    playerReset();
+    updateScore();
+    dropCounter = 0;
+  }
+
+  function playerMove(dir) {
+    player.pos.x += dir;
+    if(collide(arena, player)) {
+      player.pos.x -= dir;
+    }
+  }
+
+  function playerRotate(dir) {
+    const pos = player.pos.x;
+    let offset = 1;
+    rotate(player.matrix, dir);
+    while(collide(arena, player)) {
+      player.pos.x += offset;
+      offset = -(offset + (offset > 0 ? 1 : -1));
+      if(offset > player.matrix[0].length) {
+        rotate(player.matrix, -dir);
+        player.pos.x = pos;
+        return;
+      }
+    }
+  }
+
+  function holdPiece() {
+    if(player.holdUsed) return;
+    if(player.hold === null) {
+      player.hold = createPieceFromMatrix(player.matrix);
+      playerReset();
+    } else {
+      const temp = createPieceFromMatrix(player.matrix);
+      player.matrix = player.hold;
+      player.hold = temp;
+      player.pos.y = 0;
+      player.pos.x = Math.floor(cols/2) - Math.floor(player.matrix[0].length/2);
+      if(collide(arena, player)) {
+        arena.forEach(row => row.fill(0));
+        score = 0;
+        level = 1;
+        lines = 0;
+        dropInterval = 1000;
+        updateScore();
+      }
+    }
+    player.holdUsed = true;
+  }
+  function createPieceFromMatrix(matrix) {
+    return matrix.map(row => row.slice());
+  }
+
+  function getGhostPosition() {
+    const ghostPos = {x: player.pos.x, y: player.pos.y};
+    while(!collide(arena, {pos: ghostPos, matrix: player.matrix})) {
+      ghostPos.y++;
+    }
+    ghostPos.y--;
+    return ghostPos;
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // 배경 검정으로 채우기
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, cols, rows);
+
+    drawGrid(ctx, cols, rows);
+    drawMatrix(arena, {x:0, y:0}, ctx);
+
+    // 고스트 조각 그리기 (예상 위치 하얀색 반투명)
+    const ghostPos = getGhostPosition();
+    drawGhostMatrix(player.matrix, ghostPos, ctx);
+
+    // 플레이어 조각 그리기
+    drawMatrix(player.matrix, player.pos, ctx);
+
+    // 다음 조각 그리기
+    nextCtx.clearRect(0,0,nextCanvas.width,nextCanvas.height);
+    nextCtx.fillStyle = '#111';
+    nextCtx.fillRect(0,0,nextCanvas.width,nextCanvas.height);
+    drawMatrix(player.next, {x:1, y:1}, nextCtx);
+
+    // 홀드 조각 그리기
+    holdCtx.clearRect(0,0,holdCanvas.width,holdCanvas.height);
+    holdCtx.fillStyle = '#111';
+    holdCtx.fillRect(0,0,holdCanvas.width,holdCanvas.height);
+    if(player.hold !== null) {
+      drawMatrix(player.hold, {x:1, y:1}, holdCtx);
+    }
+  }
+
+  function updateScore() {
+    scoreElem.textContent = score;
+    levelElem.textContent = level;
+    linesElem.textContent = lines;
+  }
+
+  function update(time = 0) {
+    const deltaTime = time - lastTime;
+    lastTime = time;
+
+    dropCounter += deltaTime;
+    if(dropCounter > dropInterval) {
+      playerDrop();
+    }
+
+    draw();
+    requestAnimationFrame(update);
+  }
+
+  document.addEventListener('keydown', event => {
+    if(event.repeat) return;
+    switch(event.key) {
+      case 'ArrowLeft':
+      case 'a':
+      case 'A':
+        playerMove(-1);
+        break;
+      case 'ArrowRight':
+      case 'd':
+      case 'D':
+        playerMove(1);
+        break;
+      case 'ArrowDown':
+      case 's':
+      case 'S':
+        playerDrop();
+        break;
+      case ' ':
+        hardDrop();
+        break;
+      case 'ArrowUp':
+      case 'w':
+      case 'W':
+        playerRotate(1);
+        break;
+      case 'Shift':
+        holdPiece();
+        break;
+      case 'c':
+      case 'C':
+        playerRotate(-1);
+        break;
+    }
+  });
+
+  restartBtn.addEventListener('click', () => {
+    arena = createMatrix(cols, rows);
+    score = 0;
+    level = 1;
+    lines = 0;
+    dropInterval = 1000;
+    player.hold = null;
+    player.holdUsed = false;
+    player.next = null;
+    playerReset();
+    updateScore();
+  });
+
+  playerReset();
+  updateScore();
+  update();
+})();
+</script>
+</body>
+</html>
